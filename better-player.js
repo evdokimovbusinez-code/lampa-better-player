@@ -1,6 +1,6 @@
 /*
  * Lampa Better Player
- * v1.0.0
+ * v1.0.1
  *
  * Features:
  * 1) Hold LEFT/RIGHT to scrub backward/forward.
@@ -15,7 +15,7 @@
     if (window.lampa_better_player_ready) return;
     window.lampa_better_player_ready = true;
 
-    var VERSION = '1.0.0';
+    var VERSION = '1.0.1';
     var COMPONENT = 'better_player';
 
     var playerActive = false;
@@ -103,12 +103,28 @@
         }
     }
 
-    function stopEvent(e) {
-        if (!e) return;
+    function nativeEvent(e) {
+        return e && e.event ? e.event : e;
+    }
 
-        try { e.preventDefault(); } catch (err) {}
-        try { e.stopPropagation(); } catch (err) {}
-        try { e.stopImmediatePropagation(); } catch (err) {}
+    function eventCode(e) {
+        if (!e) return 0;
+        if (typeof e.code !== 'undefined') return e.code;
+
+        var ev = nativeEvent(e) || {};
+        return ev.keyCode || ev.which || 0;
+    }
+
+    function stopEvent(e) {
+        var ev = nativeEvent(e);
+        if (!ev) return;
+
+        /*
+         * With Lampa.Keypad, preventDefault() is enough to make
+         * keydownTrigger() stop before Controller.move('left/right').
+         */
+        try { ev.preventDefault(); } catch (err) {}
+        try { ev.stopPropagation(); } catch (err) {}
     }
 
     function isLeft(code) {
@@ -320,7 +336,7 @@
         hold.active = true;
         hold.long = false;
         hold.direction = direction;
-        hold.keyCode = e.keyCode || e.which || 0;
+        hold.keyCode = eventCode(e);
 
         var threshold = numberSetting('better_player_hold_delay', 450);
 
@@ -462,7 +478,7 @@
     function onKeyDown(e) {
         if (!playerActive) return;
 
-        var code = e.keyCode || e.which || 0;
+        var code = eventCode(e);
 
         if (next.visible) {
             if (isEnter(code)) {
@@ -495,7 +511,7 @@
     function onKeyUp(e) {
         if (!playerActive || !hold.active) return;
 
-        var code = e.keyCode || e.which || 0;
+        var code = eventCode(e);
 
         if (code !== hold.keyCode && !(isLeft(code) || isRight(code))) return;
 
@@ -643,8 +659,26 @@
         createOverlay();
         addSettings();
 
-        document.addEventListener('keydown', onKeyDown, true);
-        document.addEventListener('keyup', onKeyUp, true);
+        /*
+         * TV fix: listen through Lampa.Keypad instead of document.
+         * On a number of Smart TV browsers keyboard events are handled
+         * at window level and never reach document capture listeners.
+         * Keypad also normalizes remote-control key codes.
+         */
+        try {
+            if (Lampa.Keypad && Lampa.Keypad.listener) {
+                Lampa.Keypad.listener.follow('keydown', onKeyDown);
+                Lampa.Keypad.listener.follow('keyup', onKeyUp);
+            }
+            else {
+                window.addEventListener('keydown', onKeyDown, true);
+                window.addEventListener('keyup', onKeyUp, true);
+            }
+        }
+        catch (e) {
+            window.addEventListener('keydown', onKeyDown, true);
+            window.addEventListener('keyup', onKeyUp, true);
+        }
 
         try {
             Lampa.Player.listener.follow('start', onPlayerStart);
