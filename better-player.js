@@ -1,6 +1,6 @@
 /*
  * Lampa Better Player
- * v1.0.1
+ * v1.0.2
  *
  * Features:
  * 1) Hold LEFT/RIGHT to scrub backward/forward.
@@ -15,7 +15,7 @@
     if (window.lampa_better_player_ready) return;
     window.lampa_better_player_ready = true;
 
-    var VERSION = '1.0.1';
+    var VERSION = '1.0.2';
     var COMPONENT = 'better_player';
 
     var playerActive = false;
@@ -31,7 +31,10 @@
         target: 0,
         startPosition: 0,
         startedAt: 0,
-        wasPaused: false
+        wasPaused: false,
+        repeatCount: 0,
+        lastEventAt: 0,
+        releaseTimer: null
     };
 
     var next = {
@@ -141,6 +144,15 @@
 
     function isBack(code) {
         return code === 8 || code === 27 || code === 461 || code === 10009 || code === 88;
+    }
+
+    function isAppleTV() {
+        try {
+            return Boolean(Lampa.Platform && Lampa.Platform.is && Lampa.Platform.is('apple_tv'));
+        }
+        catch (e) {
+            return false;
+        }
     }
 
     function createOverlay() {
@@ -309,6 +321,7 @@
 
     function resetHold(commit) {
         clearTimeout(hold.timer);
+        clearTimeout(hold.releaseTimer);
         clearInterval(hold.interval);
 
         if (commit && hold.long) finishLongHold();
@@ -324,6 +337,9 @@
         hold.startPosition = 0;
         hold.startedAt = 0;
         hold.wasPaused = false;
+        hold.repeatCount = 0;
+        hold.lastEventAt = 0;
+        hold.releaseTimer = null;
     }
 
     function startHold(e, direction) {
@@ -337,12 +353,70 @@
         hold.long = false;
         hold.direction = direction;
         hold.keyCode = eventCode(e);
+        hold.repeatCount = 1;
+        hold.lastEventAt = Date.now();
 
         var threshold = numberSetting('better_player_hold_delay', 450);
 
         hold.timer = setTimeout(function () {
-            beginLongHold();
+            /*
+             * Normal remotes expose a real press duration.
+             * Apple TV may not, so Apple TV primarily uses repeated
+             * directional events below.
+             */
+            if (!isAppleTV()) beginLongHold();
         }, threshold);
+
+        if (isAppleTV()) scheduleAppleTVRelease();
+    }
+
+    function scheduleAppleTVRelease() {
+        clearTimeout(hold.releaseTimer);
+
+        /*
+         * Siri Remote / tvOS wrappers may not deliver a reliable keyup.
+         * Treat a short gap after the last repeated direction event as release.
+         */
+        hold.releaseTimer = setTimeout(function () {
+            if (!hold.active) return;
+
+            if (hold.long) {
+                resetHold(true);
+            }
+            else {
+                var direction = hold.direction;
+                resetHold(false);
+                shortSeek(direction);
+            }
+        }, 520);
+    }
+
+    function repeatHold(direction) {
+        if (!hold.active) return;
+
+        var now = Date.now();
+
+        if (direction !== hold.direction) {
+            if (hold.long) resetHold(true);
+            else resetHold(false);
+            return;
+        }
+
+        hold.repeatCount += 1;
+        hold.lastEventAt = now;
+
+        if (isAppleTV()) {
+            scheduleAppleTVRelease();
+
+            /*
+             * Two or more rapidly repeated direction events means the
+             * Siri Remote is being held/swiped continuously.
+             */
+            if (!hold.long && hold.repeatCount >= 2) {
+                clearTimeout(hold.timer);
+                beginLongHold();
+            }
+        }
     }
 
     function shortSeek(direction) {
@@ -503,7 +577,10 @@
 
         stopEvent(e);
 
-        if (hold.active) return;
+        if (hold.active) {
+            repeatHold(direction);
+            return;
+        }
 
         startHold(e, direction);
     }
@@ -518,6 +595,7 @@
         stopEvent(e);
 
         clearTimeout(hold.timer);
+        clearTimeout(hold.releaseTimer);
 
         if (hold.long) {
             resetHold(true);
@@ -692,7 +770,7 @@
             reset: resetEpisodeState
         };
 
-        console.log('[Better Player] loaded v' + VERSION);
+        console.log('[Better Player] loaded v' + VERSION + (isAppleTV() ? ' [Apple TV mode]' : ''));
     }
 
     if (window.appready) {
